@@ -9,6 +9,7 @@ import {
 	formatTime,
 	getBindings,
 	getDockerPath,
+	getDurableObjectContainerApps,
 	hasDurableObjectExports,
 	parseNonHyphenedUuid,
 	printBindings,
@@ -30,6 +31,8 @@ import {
 	type BundleSize,
 } from "./helpers/bundle-reporter";
 import { confirmLatestDeploymentOverwrite } from "./helpers/confirm-latest-deployment-overwrite";
+import { addContainerImagesBinding } from "./helpers/container-image-bindings";
+import { getContainerMetadata } from "./helpers/container-metadata";
 import { createWorkerUploadForm } from "./helpers/create-worker-upload-form";
 import { deployWfpUserWorker } from "./helpers/deploy-wfp";
 import {
@@ -130,6 +133,18 @@ export type DeployCallbacks = {
 		| ((
 				config: Config,
 				normalisedContainerConfig: ContainerNormalizedConfig[],
+				args: { versionId: string; accountId: string; scriptName: string }
+		  ) => Promise<void>)
+		| undefined;
+	prepareDurableObjectContainerApplications:
+		| ((
+				config: Config,
+				args: { dryRun: boolean; scriptName: string }
+		  ) => Promise<Record<string, Record<string, string>>>)
+		| undefined;
+	deployDurableObjectContainerApplications:
+		| ((
+				config: Config,
 				args: { versionId: string; accountId: string; scriptName: string }
 		  ) => Promise<void>)
 		| undefined;
@@ -238,6 +253,13 @@ async function deployWorker(
 		content,
 		sourceMaps,
 	} = buildResult;
+	const skipContainerChanges = props.containersRollout === "none";
+	const preparedContainerImages = skipContainerChanges
+		? undefined
+		: await callbacks.prepareDurableObjectContainerApplications?.(config, {
+				dryRun: Boolean(isDryRun),
+				scriptName,
+			});
 	// Durable Object lifecycle is expressed through either legacy `migrations`
 	// or the declarative `exports` map. Only one is sent on each upload.
 	const { migrations, exports } = await resolveExportsUploadPayload({
@@ -308,6 +330,10 @@ async function deployWorker(
 		type: "deploy",
 		workerExists,
 	});
+	addContainerImagesBinding(config, bindings, preparedContainerImages ?? {}, {
+		preserveExisting: skipContainerChanges,
+		workerExists,
+	});
 
 	if (workersSitesAssets.manifest) {
 		modules.push({
@@ -333,7 +359,9 @@ async function deployWorker(
 		migrations,
 		exports,
 		modules,
-		containers: config.containers,
+		containers: skipContainerChanges
+			? undefined
+			: getContainerMetadata(config, preparedContainerImages),
 		sourceMaps,
 		compatibility_date: compatibilityDate,
 		compatibility_flags: compatibilityFlags,
@@ -774,6 +802,18 @@ async function deployWorker(
 	) {
 		assert(versionId && accountId);
 		await callbacks.deployContainers(config, normalisedContainerConfig, {
+			versionId,
+			accountId,
+			scriptName,
+		});
+	}
+	if (
+		!skipContainerChanges &&
+		getDurableObjectContainerApps(config.containers).length > 0 &&
+		callbacks.deployDurableObjectContainerApplications
+	) {
+		assert(versionId && accountId);
+		await callbacks.deployDurableObjectContainerApplications(config, {
 			versionId,
 			accountId,
 			scriptName,
