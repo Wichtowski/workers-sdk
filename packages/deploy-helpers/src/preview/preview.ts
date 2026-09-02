@@ -507,8 +507,9 @@ async function assemblePreviewDeploymentSettings(
 	} else if (config.cache !== undefined) {
 		request.cache = config.cache;
 	}
-	if (config.placement) {
-		request.placement = parseConfigPlacement(config);
+	const placement = previews?.placement ?? config.placement;
+	if (placement) {
+		request.placement = parseConfigPlacement(placement);
 	}
 
 	// Declare which DO classes are container-backed so the runtime populates
